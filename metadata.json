@@ -1,0 +1,5 @@
+{
+  "name": "WaveStat Browser Edition",
+  "description": "A web-based recreation of the WaveStat software for cluster analysis of image data and wavelet coefficients, based on the 1990s research paper.",
+  "requestFramePermissions": []
+}
