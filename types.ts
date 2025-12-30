@@ -36,6 +36,7 @@ export interface ProcessingOptions {
   clusters: number;
   levels: number;
   enableClustering: boolean;
+  resolution: number;
 }
 
 export interface ImageDataState {

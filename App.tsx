@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { 
   WaveletType, 
   ClusterTarget, 
@@ -14,6 +14,7 @@ import { performDWT, performIDWT } from './services/waveletEngine';
 import { performClustering, applyClusters } from './services/clusterEngine';
 
 const App: React.FC = () => {
+  const [sourceImage, setSourceImage] = useState<HTMLImageElement | null>(null);
   const [image, setImage] = useState<ImageDataState | null>(null);
   const [results, setResults] = useState<ProcessedResults | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -24,8 +25,48 @@ const App: React.FC = () => {
     linkage: LinkageMethod.KMEANS_FAST,
     clusters: 16,
     levels: 2,
-    enableClustering: true
+    enableClustering: true,
+    resolution: 256
   });
+
+  const availableResolutions = useMemo(() => {
+    if (!sourceImage) return [64, 128, 256, 512, 1024];
+    const maxDim = Math.max(sourceImage.width, sourceImage.height);
+    const powers = [64, 128, 256, 512, 1024];
+    // Always include at least one size, but filter based on image if it's too small? 
+    // Actually, upscaling is fine for analysis, but we highlight the "native" range.
+    return powers;
+  }, [sourceImage]);
+
+  const processSourceImage = useCallback((img: HTMLImageElement, size: number) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Use a square aspect for Wavelet simplicity
+    ctx.drawImage(img, 0, 0, size, size);
+    const imageData = ctx.getImageData(0, 0, size, size);
+    const grayscale = new Float32Array(size * size);
+    
+    for (let i = 0; i < imageData.data.length; i += 4) {
+      const r = imageData.data[i];
+      const g = imageData.data[i+1];
+      const b = imageData.data[i+2];
+      // ITU-R 601 Luma transform
+      grayscale[i/4] = 0.299 * r + 0.587 * g + 0.114 * b;
+    }
+
+    setImage({ original: grayscale, width: size, height: size });
+    setResults(null);
+  }, []);
+
+  useEffect(() => {
+    if (sourceImage) {
+      processSourceImage(sourceImage, options.resolution);
+    }
+  }, [sourceImage, options.resolution, processSourceImage]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -33,26 +74,7 @@ const App: React.FC = () => {
 
     const img = new Image();
     img.onload = () => {
-      const size = 256;
-      const canvas = document.createElement('canvas');
-      canvas.width = size;
-      canvas.height = size;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      ctx.drawImage(img, 0, 0, size, size);
-      const imageData = ctx.getImageData(0, 0, size, size);
-      const grayscale = new Float32Array(size * size);
-      
-      for (let i = 0; i < imageData.data.length; i += 4) {
-        const r = imageData.data[i];
-        const g = imageData.data[i+1];
-        const b = imageData.data[i+2];
-        grayscale[i/4] = 0.299 * r + 0.587 * g + 0.114 * b;
-      }
-
-      setImage({ original: grayscale, width: size, height: size });
-      setResults(null);
+      setSourceImage(img);
     };
     img.src = URL.createObjectURL(file);
   };
@@ -80,7 +102,6 @@ const App: React.FC = () => {
         let workData: Float32Array;
         let coefficients: Float32Array;
         
-        // Use generalized DWT
         coefficients = performDWT(image.original!, image.width, image.height, options.levels, options.wavelet);
 
         let clusterMap: Uint32Array | null = null;
@@ -132,12 +153,33 @@ const App: React.FC = () => {
         <div className="w-full lg:w-auto space-y-6">
           <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
             <h2 className="text-lg font-semibold mb-3 text-blue-300">1. Image Source</h2>
-            <input 
-              type="file" 
-              accept="image/*" 
-              onChange={handleFileUpload}
-              className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-900 file:text-blue-100 hover:file:bg-blue-800 transition-colors"
-            />
+            <div className="space-y-4">
+              <input 
+                type="file" 
+                accept="image/*" 
+                onChange={handleFileUpload}
+                className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-900 file:text-blue-100 hover:file:bg-blue-800 transition-colors"
+              />
+              
+              {sourceImage && (
+                <div className="pt-2">
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Process Resolution (px)</label>
+                  <select 
+                    className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm"
+                    value={options.resolution}
+                    onChange={(e) => setOptions({ ...options, resolution: parseInt(e.target.value) })}
+                  >
+                    {availableResolutions.map(res => (
+                      <option key={res} value={res}>
+                        {res} × {res} {res === 256 ? '(Default)' : ''}
+                        {sourceImage && (res > sourceImage.width || res > sourceImage.height) ? ' (Upscaled)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-slate-500 mt-1">Note: Powers of 2 are required for multilevel decomposition.</p>
+                </div>
+              )}
+            </div>
           </div>
 
           <ProcessingPanel 
@@ -223,7 +265,7 @@ const App: React.FC = () => {
                     clusterCount={results.clusterCount}
                   />
                 ) : (
-                  <div className="flex items-center justify-center h-[256px] bg-slate-900 rounded-lg text-slate-600 text-xs italic">
+                  <div className="flex items-center justify-center min-h-[256px] bg-slate-900 rounded-lg text-slate-600 text-xs italic">
                     Clustering disabled
                   </div>
                 )}
@@ -303,9 +345,11 @@ const CanvasDisplay: React.FC<{
           [r, g, b] = color;
         }
       } else if (isDiff && compareData) {
+        // Difference view: scaled for visibility
         const diff = Math.abs(data[i] - compareData[i]) * 10;
         r = g = b = Math.min(255, diff);
       } else if (isDWT) {
+        // Shift coefficients for visualization (signed to unsigned)
         const val = 128 + data[i];
         r = g = b = Math.max(0, Math.min(255, val));
       } else {
@@ -324,12 +368,13 @@ const CanvasDisplay: React.FC<{
   }, [data, width, height, isDWT, isDiff, compareData, clusterMap, clusterCount]);
 
   return (
-    <div className="relative group flex justify-center">
+    <div className="relative group flex justify-center w-full">
        <canvas 
         ref={canvasRef} 
         width={width} 
         height={height} 
-        className="w-full max-w-[256px] h-auto rounded-lg shadow-inner bg-black border border-slate-700"
+        className="w-full h-auto rounded-lg shadow-inner bg-black border border-slate-700 transition-all duration-300"
+        style={{ maxWidth: width > 512 ? '512px' : `${width}px` }}
       />
     </div>
   );
